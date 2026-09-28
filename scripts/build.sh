@@ -64,10 +64,11 @@ done
 grep -E "^CONFIG_(KSU|KSU_SUSFS|LOCALVERSION)=" "$OUT/.config"
 
 step "5/8 release 串契约"
-[ -f "$OUT/include/config/kernel.release" ] || die "kernel.release 未生成"
-RELEASE_RAW="$(cat "$OUT/include/config/kernel.release")"
+# include/config/kernel.release 只在真正编译时才生成，所以这里用 make kernelrelease 取值。
+RELEASE_RAW="$(make -s O="$OUT" ARCH=arm64 kernelrelease 2>/dev/null | tail -1)"
+[ -n "$RELEASE_RAW" ] || die "make kernelrelease 取不到值"
 RELEASE="${RELEASE_RAW%+}"
-log "kernel.release = $RELEASE_RAW"
+log "kernel release = $RELEASE_RAW"
 [ "$RELEASE" = "$EXPECT_RELEASE" ] || die "release 不是 $EXPECT_RELEASE（实际 $RELEASE_RAW）"
 case "$RELEASE" in *ksu*|*susfs*|*KSU*|*SUSFS*) die "release 串含检测敏感词：$RELEASE" ;; esac
 case "$RELEASE" in *-g[0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) die "release 串含 -g<hash>：$RELEASE" ;; esac
@@ -95,6 +96,12 @@ make -j"$JOBS" O="$OUT" ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
 KIMG="$OUT/arch/arm64/boot/Image.gz-dtb"
 [ -f "$KIMG" ] || { grep -nE 'error:|undefined reference' "$LOG" | head -40; die "Image.gz-dtb 未产出"; }
 log "Image.gz-dtb = $(stat -c%s "$KIMG") 字节"
+
+# 编译后 kernel.release 文件应已生成，且必须与前面的契约一致
+RELFILE="$OUT/include/config/kernel.release"
+[ -f "$RELFILE" ] || die "编译后仍无 include/config/kernel.release"
+[ "$(cat "$RELFILE")" = "$RELEASE_RAW" ] || die "kernel.release 文件($(cat "$RELFILE")) 与 kernelrelease($RELEASE_RAW) 不一致"
+log "kernel.release 文件一致：$(cat "$RELFILE")"
 
 step "7/8 产物自证（KSU/SUSFS 真的编进内核了吗）"
 mkdir -p "$OUT/verify"
