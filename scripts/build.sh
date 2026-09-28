@@ -146,14 +146,22 @@ log "kernel.release 文件一致：$(cat "$RELFILE")"
 step "7/8 产物自证（KSU/SUSFS 真的编进内核了吗）"
 mkdir -p "$OUT/verify"
 python3 - "$KIMG" "$OUT/verify/Image" <<'PY'
-import gzip, io, sys
+import os, sys, zlib
 raw = open(sys.argv[1], 'rb').read()
-# 这棵树的 Image.gz-dtb = Image.gz（单个 gzip 成员）+ 多个 dtb(FDT) 拼接，
-# 所以只能用 GzipFile 解第一个成员；gzip.decompress 会去读第二个成员而报 BadGzipFile。
-with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
-    img = gz.read()
+# 这棵树的 Image.gz-dtb = Image.gz（单个 gzip 成员）+ 多个 dtb(FDT) 拼接。
+# Python 的 gzip 模块按规范会继续找下一个成员，碰到尾部的 dtb 就 BadGzipFile；
+# zlib.decompressobj(31) 只解第一个 gzip 流，剩余部分留在 unused_data。
+d = zlib.decompressobj(31)
+img = d.decompress(raw)
+tail = d.unused_data
+assert not d.unconsumed_tail, "第一个 gzip 流没解干净"
+assert tail[:4] == b'\xd0\x0d\xfe\xed', f"追加数据不是 FDT 开头：{tail[:4]!r}"
+plain = os.path.join(os.path.dirname(sys.argv[1]), 'Image')
 open(sys.argv[2], 'wb').write(img)
-print(f"[verify] Image.gz-dtb {len(raw)} 字节 → 解出 Image {len(img)} 字节（其余是追加的 dtb）")
+if os.path.exists(plain):
+    same = os.path.getsize(plain) == len(img)
+    print(f"[verify] 与同目录未压缩 Image 对照：{'一致' if same else '不一致(!!)'} ({os.path.getsize(plain)} vs {len(img)})")
+print(f"[verify] Image.gz-dtb {len(raw)} = gzip({len(img)}) + 追加 {len(tail)} 字节（dtb 链）")
 PY
 VIMG="$OUT/verify/Image"
 hit() { c=$(grep -ac -- "$1" "$VIMG" 2>/dev/null || true); [ "${c:-0}" -gt 0 ] || die "解压 Image 里找不到: $1"; log "命中 $1 = $c"; }
