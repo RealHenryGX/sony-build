@@ -172,7 +172,8 @@ hit KernelSU
 hit 'ksu_'
 hit 'u:r:zygote:s0'
 hit 'u:r:su:s0'
-strings -a "$VIMG" | grep -m1 'Linux version'
+# 注意：grep -m1 会提前关闭管道，在 set -o pipefail 下会让 strings 收 SIGPIPE 而中断脚本
+log "内核 banner: $(strings -a "$VIMG" | grep -m1 'Linux version' || echo '(未找到)')"
 
 step "8/8 重打包 boot.img（原厂 ramdisk + 原 header 参数）"
 # 全部在 $OUT/repack 里做，避免往内核树里拉东西（本地跑时尤其重要）
