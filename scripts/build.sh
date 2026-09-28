@@ -21,6 +21,8 @@ die()  { echo "FATAL: $*" >&2; exit 1; }
 step() { echo; echo "==== $* ===="; }
 
 export ARCH=arm64
+# haydn 同款的 LLVM 链接/归档工具（编译仍用 clang + GNU as，保持已验证的汇编路径）
+LLVM_TOOLS="LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip"
 export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-gravity}"
 export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-gravity-ext}"
 export KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-$(date)}"
@@ -35,20 +37,26 @@ step "1/8 交叉工具链 shim（工具链里的裸 ld/ar 会抢宿主 gcc，必
 TOOLBIN="${TOOLBIN:-$(dirname "$(command -v clang)")}"
 TOOLBIN="$(cd "$TOOLBIN" && pwd)"
 [ -x "$TOOLBIN/clang" ] || die "找不到 clang（TOOLBIN=$TOOLBIN）"
+TOOLBIN_EXTRA="${TOOLBIN_EXTRA:-}"
+[ -n "$TOOLBIN_EXTRA" ] && TOOLBIN_EXTRA="$(cd "$TOOLBIN_EXTRA" && pwd)"
 rm -rf "$SHIM"; mkdir -p "$SHIM"
-for t in clang clang++ lld ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-readelf llvm-strip; do
+for t in clang clang++ lld ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-readelf llvm-strip llvm-size; do
     [ -x "$TOOLBIN/$t" ] && ln -sf "$TOOLBIN/$t" "$SHIM/$t"
 done
-for pre in aarch64-linux-gnu- arm-linux-gnueabi-; do
-    for f in "$TOOLBIN/$pre"*; do
-        [ -x "$f" ] && ln -sf "$f" "$SHIM/$(basename "$f")"
+# 备用目录只借它的 GNU 交叉 binutils（as/ld/ar 的 aarch64/arm 前缀版）
+if [ -n "$TOOLBIN_EXTRA" ]; then
+    for pre in aarch64-linux-gnu- arm-linux-gnueabi-; do
+        for f in "$TOOLBIN_EXTRA/$pre"*; do
+            [ -x "$f" ] && ln -sf "$f" "$SHIM/$(basename "$f")"
+        done
     done
-done
+fi
 # 从 PATH 里剔除原始工具链目录：只让 shim 暴露目标工具，宿主工具（ld/ar/nm）留给系统
 rest=""; oIFS="$IFS"; IFS=:
 for d in $PATH; do
     [ -z "$d" ] && continue
     [ "$d" = "$TOOLBIN" ] && continue
+    [ -n "$TOOLBIN_EXTRA" ] && [ "$d" = "$TOOLBIN_EXTRA" ] && continue
     rest="${rest:+$rest:}$d"
 done
 IFS="$oIFS"
@@ -86,7 +94,7 @@ if [ "${SKIP_BUILD:-0}" = "1" ] && [ -f "$OUT/arch/arm64/boot/Image.gz-dtb" ] &&
 else
     rm -rf "$OUT"; mkdir -p "$OUT"
     make -j"$JOBS" O="$OUT" ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
-         CROSS_COMPILE_ARM32=arm-linux-gnueabi- "$DEFCONFIG" >/dev/null
+         CROSS_COMPILE_ARM32=arm-linux-gnueabi- $LLVM_TOOLS "$DEFCONFIG" >/dev/null
     cp "$OUT/.config" "$OUT/final.config"   # upload-artifact 会跳过 .config 这种隐藏名
 fi
 
@@ -115,7 +123,7 @@ if [ "$REUSE" = "1" ]; then
     log "SKIP_BUILD=1：跳过编译（复用 $OUT/arch/arm64/boot/Image.gz-dtb）"
 else
 make -j"$JOBS" O="$OUT" ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
-     CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+     CROSS_COMPILE_ARM32=arm-linux-gnueabi- $LLVM_TOOLS \
      KCFLAGS+=-Wno-error=implicit-function-declaration \
      KCFLAGS+=-Wno-error=implicit-int \
      KCFLAGS+=-Wno-error=incompatible-function-pointer-types \

@@ -80,12 +80,17 @@ jobs:
 
       - name: Setup toolchain
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/toolchain" && cd "$GITHUB_WORKSPACE/toolchain"
+          mkdir -p "$GITHUB_WORKSPACE/toolchain" "$GITHUB_WORKSPACE/llvm" && cd "$GITHUB_WORKSPACE"
+          # 官方 LLVM（干净的 clang，不带定制厂商串）
+          wget -q https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/LLVM-20.1.8-Linux-X64.tar.xz
+          tar -xf LLVM-20.1.8-Linux-X64.tar.xz -C llvm --strip-components=1
+          rm -f LLVM-20.1.8-Linux-X64.tar.xz
+          # GNU 交叉 binutils（as 仍走 GNU，保持已验证的汇编路径）
+          cd toolchain
           wget -q https://github.com/Mandi-Sa/clang/releases/download/amd64-kernel-arm_static-22/llvm22.0.0-binutils2.44_amd64-kernel-arm_static-20250831.7z
           7za x llvm22.0.0-binutils2.44_amd64-kernel-arm_static-20250831.7z >/dev/null
           rm llvm22.0.0-binutils2.44_amd64-kernel-arm_static-20250831.7z
-          echo "$GITHUB_WORKSPACE/toolchain/bin" >> "$GITHUB_PATH"
-          ls "$GITHUB_WORKSPACE/toolchain/bin" | head -5
+          ls "$GITHUB_WORKSPACE/llvm/bin" | head -5
 
       - name: Audit build repo (零构建期改写)
         run: |
@@ -103,6 +108,8 @@ jobs:
           EXPECT_RELEASE: ${{ github.event.inputs.expected_release }}
           DEVICE: ${{ github.event.inputs.device }}
           STOCK_BOOT_URL: ${{ github.event.inputs.stock_boot_url }}
+          TOOLBIN: ${{ github.workspace }}/llvm/bin
+          TOOLBIN_EXTRA: ${{ github.workspace }}/toolchain/bin
         run: |
           set -o pipefail
           mkdir -p "$OUT"
