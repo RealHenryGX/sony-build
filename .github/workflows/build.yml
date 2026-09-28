@@ -105,6 +105,7 @@ jobs:
           STOCK_BOOT_URL: ${{ github.event.inputs.stock_boot_url }}
         run: |
           set -o pipefail
+          mkdir -p "$OUT"
           chmod +x scripts/*.sh
           bash scripts/build.sh 2>&1 | tee "$OUT/build-full.log"
 

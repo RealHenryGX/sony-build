@@ -55,7 +55,10 @@ make -j"$JOBS" O="$OUT" ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
 cp "$OUT/.config" "$OUT/final.config"   # upload-artifact 会跳过 .config 这种隐藏名
 
 step "4/8 resolved config 断言"
-for k in CONFIG_KSU CONFIG_KPROBES CONFIG_KPROBE_EVENTS CONFIG_KSU_SUSFS CONFIG_IKCONFIG_PROC; do
+# 只断言 KSU 真正需要的符号（v0.9.5 源码里只 #ifdef CONFIG_KPROBES）。
+# 注意：CONFIG_KPROBE_EVENTS 是 4.14+ 的名字，4.9 树上叫 CONFIG_KPROBE_EVENT；
+# 名字写错会被 kconfig 当未知符号静默丢弃，所以断言必须落在 resolved .config 上。
+for k in CONFIG_KSU CONFIG_KPROBES CONFIG_KALLSYMS CONFIG_KSU_SUSFS CONFIG_IKCONFIG_PROC CONFIG_MODULES; do
     grep -q "^$k=y" "$OUT/.config" || die "$k 未出现在 resolved .config（被 Kconfig 静默丢弃？）"
 done
 grep -E "^CONFIG_(KSU|KSU_SUSFS|LOCALVERSION)=" "$OUT/.config"
