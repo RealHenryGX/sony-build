@@ -26,13 +26,43 @@ export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-gravity-ext}"
 export KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-$(date)}"
 export LC_ALL=C
 
+# shim 必须在 cd 之前算（$OUT 后面会被清空）
+SHIM="${SHIM:-$PWD/toolshim}"
+
 cd "$KERNEL_DIR"
 
-step "1/8 工具链自证"
-command -v clang >/dev/null || die "clang 不在 PATH"
-command -v aarch64-linux-gnu-ld >/dev/null || die "aarch64-linux-gnu-ld 不在 PATH"
-clang --version | head -1
-aarch64-linux-gnu-ld --version | head -1
+step "1/8 交叉工具链 shim（工具链里的裸 ld/ar 会抢宿主 gcc，必须隔离）"
+TOOLBIN="${TOOLBIN:-$(dirname "$(command -v clang)")}"
+TOOLBIN="$(cd "$TOOLBIN" && pwd)"
+[ -x "$TOOLBIN/clang" ] || die "找不到 clang（TOOLBIN=$TOOLBIN）"
+rm -rf "$SHIM"; mkdir -p "$SHIM"
+for t in clang clang++ lld ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-readelf llvm-strip; do
+    [ -x "$TOOLBIN/$t" ] && ln -sf "$TOOLBIN/$t" "$SHIM/$t"
+done
+for pre in aarch64-linux-gnu- arm-linux-gnueabi-; do
+    for f in "$TOOLBIN/$pre"*; do
+        [ -x "$f" ] && ln -sf "$f" "$SHIM/$(basename "$f")"
+    done
+done
+# 从 PATH 里剔除原始工具链目录：只让 shim 暴露目标工具，宿主工具（ld/ar/nm）留给系统
+rest=""; oIFS="$IFS"; IFS=:
+for d in $PATH; do
+    [ -z "$d" ] && continue
+    [ "$d" = "$TOOLBIN" ] && continue
+    rest="${rest:+$rest:}$d"
+done
+IFS="$oIFS"
+export PATH="$SHIM:$rest"
+command -v aarch64-linux-gnu-ld >/dev/null || die "aarch64-linux-gnu-ld 不在 PATH（shim 没搭好）"
+command -v arm-linux-gnueabi-ld >/dev/null || die "arm-linux-gnueabi-ld 不在 PATH（shim 没搭好）"
+log "clang:    $(clang --version | head -1)"
+log "host ld:  $(ld --version 2>/dev/null | head -1)"
+log "host gcc: $(gcc --version | head -1)"
+_selftest="$(mktemp -d)"
+echo 'int main(void){return 0;}' > "$_selftest/t.c"
+gcc "$_selftest/t.c" -o "$_selftest/t" || die "宿主 gcc 链接失败 —— 交叉工具链污染了 PATH"
+rm -rf "$_selftest"
+log "宿主 gcc 链接自检通过"
 
 step "2/8 树内自证（零构建期补丁）"
 [ -f drivers/kernelsu/ksu.c ]                            || die "drivers/kernelsu/ 不在树里（KernelSU 未 vendored）"
