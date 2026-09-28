@@ -1,0 +1,125 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: 'apollo (XZ2C) / akari (XZ2)'
+        required: true
+        default: apollo
+      defconfig:
+        description: 'arch/arm64/configs/ 下已提交的 defconfig'
+        required: true
+        default: tama_apollo_dcm_susfs_defconfig
+      kernel_repo:
+        description: '内核仓'
+        required: true
+        default: RealHenryGX/android_kernel_sony_sdm845
+      kernel_ref:
+        description: '内核分支'
+        required: true
+        default: lineage-20-ksu
+      expected_release:
+        description: '契约：kernel.release 必须等于（尾随 + 允许）'
+        required: true
+        default: 4.9.227-gravity-perf
+      stock_boot_url:
+        description: '该机型原厂 boot_a.img（提供 ramdisk + header 参数）'
+        required: true
+        default: https://github.com/RealHenryGX/android_kernel_sony_sdm845/releases/download/stock-boot-a/boot_a.img
+      os_version:
+        required: true
+        default: '13.0.0'
+      os_patch_level:
+        required: true
+        default: '2023-09'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.inputs.device }}
+  cancel-in-progress: true
+
+env:
+  TZ: Asia/Shanghai
+  KERNEL_DIR: kernel
+  OUT: ${{ github.workspace }}/out
+  DIST: ${{ github.workspace }}/dist
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Free disk space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: Install packages
+        run: |
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
+          timeout 300 sudo apt-get update || true
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev cpio p7zip-full git python3
+
+      - name: Checkout kernel source
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.event.inputs.kernel_repo }}
+          ref: ${{ github.event.inputs.kernel_ref }}
+          path: ${{ env.KERNEL_DIR }}
+          fetch-depth: 1
+
+      - name: Setup toolchain
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/toolchain" && cd "$GITHUB_WORKSPACE/toolchain"
+          wget -q https://github.com/Mandi-Sa/clang/releases/download/amd64-kernel-arm_static-22/llvm22.0.0-binutils2.44_amd64-kernel-arm_static-20250831.7z
+          7za x llvm22.0.0-binutils2.44_amd64-kernel-arm_static-20250831.7z >/dev/null
+          rm llvm22.0.0-binutils2.44_amd64-kernel-arm_static-20250831.7z
+          echo "$GITHUB_WORKSPACE/toolchain/bin" >> "$GITHUB_PATH"
+          ls "$GITHUB_WORKSPACE/toolchain/bin" | head -5
+
+      - name: Audit build repo (零构建期改写)
+        run: |
+          # 构建仓里不允许出现源码级改写：patch / sed -i / git apply 一律不许
+          if grep -rnE 'git apply|patch -p1|sed -i' scripts/ ; then
+            echo "FATAL: 构建脚本里出现构建期改写，违反零补丁原则"; exit 1
+          fi
+          echo "构建脚本自检通过（无构建期改写）"
+
+      - name: Build
+        env:
+          DEFCONFIG: ${{ github.event.inputs.defconfig }}
+          EXPECT_RELEASE: ${{ github.event.inputs.expected_release }}
+          DEVICE: ${{ github.event.inputs.device }}
+          STOCK_BOOT_URL: ${{ github.event.inputs.stock_boot_url }}
+        run: |
+          set -o pipefail
+          chmod +x scripts/*.sh
+          bash scripts/build.sh 2>&1 | tee "$OUT/build-full.log"
+
+      - name: Pack AnyKernel3
+        if: always()
+        env:
+          RELEASE: ${{ github.event.inputs.expected_release }}
+          DEVICE: ${{ github.event.inputs.device }}
+          IMAGE: ${{ github.workspace }}/out/arch/arm64/boot/Image.gz-dtb
+        run: bash scripts/pack-ak3.sh || echo "AK3 打包失败（不影响 boot.img 产物）"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.device }}-${{ github.run_number }}
+          path: |
+            dist/*
+            out/final.config
+            out/build-full.log
+          if-no-files-found: warn
+          compression-level: 6
+          retention-days: 30
