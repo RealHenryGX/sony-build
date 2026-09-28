@@ -164,11 +164,14 @@ if os.path.exists(plain):
 print(f"[verify] Image.gz-dtb {len(raw)} = gzip({len(img)}) + 追加 {len(tail)} 字节（dtb 链）")
 PY
 VIMG="$OUT/verify/Image"
-hit() { c=$(grep -ac -- "$1" "$VIMG" 2>/dev/null || true); [ "${c:-0}" -gt 0 ] || die "解压 Image 里找不到: $1"; log "命中 $1 = $c"; }
+hit() { c=$(grep -acF -- "$1" "$VIMG" 2>/dev/null || true); [ "${c:-0}" -gt 0 ] || die "解压 Image 里找不到: $1"; log "命中 $1 = $c"; }
+# 这些串是实测存在于产物里的（宏名如 KERNEL_ZYGOTE_DOMAIN 不会出现在二进制里，别拿它断言）
 hit susfs
-hit KERNEL_ZYGOTE_DOMAIN
-hit kernelsu
-hit ksu_handle
+hit 'v1.5.5'
+hit KernelSU
+hit 'ksu_'
+hit 'u:r:zygote:s0'
+hit 'u:r:su:s0'
 strings -a "$VIMG" | grep -m1 'Linux version'
 
 step "8/8 重打包 boot.img（原厂 ramdisk + 原 header 参数）"
