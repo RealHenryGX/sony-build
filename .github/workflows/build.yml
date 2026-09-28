@@ -67,6 +67,9 @@ jobs:
           timeout 300 sudo apt-get update || true
           sudo apt-get install -y bc bison flex libssl-dev libelf-dev cpio p7zip-full git python3
 
+      - name: Checkout build repo
+        uses: actions/checkout@v5
+
       - name: Checkout kernel source
         uses: actions/checkout@v5
         with:
@@ -87,6 +90,8 @@ jobs:
       - name: Audit build repo (零构建期改写)
         run: |
           # 构建仓里不允许出现源码级改写：patch / sed -i / git apply 一律不许
+          [ -d scripts ] || { echo "FATAL: scripts/ 不在工作区（构建仓没 checkout？）"; exit 1; }
+          [ -f scripts/build.sh ] || { echo "FATAL: scripts/build.sh 缺失"; exit 1; }
           if grep -rnE 'git apply|patch -p1|sed -i' scripts/ ; then
             echo "FATAL: 构建脚本里出现构建期改写，违反零补丁原则"; exit 1
           fi
