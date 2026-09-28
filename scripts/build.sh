@@ -79,10 +79,16 @@ log "defconfig sha256: $(sha256sum "arch/arm64/configs/$DEFCONFIG" | cut -d' ' -
 grep -n 'CONFIG_LOCALVERSION=' "arch/arm64/configs/$DEFCONFIG"
 
 step "3/8 生成配置"
-rm -rf "$OUT"; mkdir -p "$OUT"
-make -j"$JOBS" O="$OUT" ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
-     CROSS_COMPILE_ARM32=arm-linux-gnueabi- "$DEFCONFIG" >/dev/null
-cp "$OUT/.config" "$OUT/final.config"   # upload-artifact 会跳过 .config 这种隐藏名
+REUSE=0
+if [ "${SKIP_BUILD:-0}" = "1" ] && [ -f "$OUT/arch/arm64/boot/Image.gz-dtb" ] && [ -f "$OUT/.config" ]; then
+    REUSE=1
+    log "SKIP_BUILD=1：复用已有 $OUT（配置 + 产物），跳过配置与编译 —— 仅用于迭代调试"
+else
+    rm -rf "$OUT"; mkdir -p "$OUT"
+    make -j"$JOBS" O="$OUT" ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
+         CROSS_COMPILE_ARM32=arm-linux-gnueabi- "$DEFCONFIG" >/dev/null
+    cp "$OUT/.config" "$OUT/final.config"   # upload-artifact 会跳过 .config 这种隐藏名
+fi
 
 step "4/8 resolved config 断言"
 # 只断言 KSU 真正需要的符号（v0.9.5 源码里只 #ifdef CONFIG_KPROBES）。
@@ -105,6 +111,9 @@ case "$RELEASE" in *-g[0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) die "release 串含 -g<
 
 step "6/8 编译 Image.gz-dtb（流式日志）"
 LOG="$OUT/build.log"
+if [ "$REUSE" = "1" ]; then
+    log "SKIP_BUILD=1：跳过编译（复用 $OUT/arch/arm64/boot/Image.gz-dtb）"
+else
 make -j"$JOBS" O="$OUT" ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
      CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
      KCFLAGS+=-Wno-error=implicit-function-declaration \
@@ -123,6 +132,7 @@ make -j"$JOBS" O="$OUT" ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
        /error:|Error [0-9]|undefined reference|FAILED/ { print "!! " $0 }
        { n++; if (n % 2000 == 0) print "[progress] " n " 行日志…" }
        END { print "[log] 合计 " n " 行" }'
+fi
 KIMG="$OUT/arch/arm64/boot/Image.gz-dtb"
 [ -f "$KIMG" ] || { grep -nE 'error:|undefined reference' "$LOG" | head -40; die "Image.gz-dtb 未产出"; }
 log "Image.gz-dtb = $(stat -c%s "$KIMG") 字节"
@@ -136,11 +146,14 @@ log "kernel.release 文件一致：$(cat "$RELFILE")"
 step "7/8 产物自证（KSU/SUSFS 真的编进内核了吗）"
 mkdir -p "$OUT/verify"
 python3 - "$KIMG" "$OUT/verify/Image" <<'PY'
-import gzip, sys
+import gzip, io, sys
 raw = open(sys.argv[1], 'rb').read()
-img = gzip.decompress(raw)          # 尾部 unused_data 就是追加的 dtb
+# 这棵树的 Image.gz-dtb = Image.gz（单个 gzip 成员）+ 多个 dtb(FDT) 拼接，
+# 所以只能用 GzipFile 解第一个成员；gzip.decompress 会去读第二个成员而报 BadGzipFile。
+with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
+    img = gz.read()
 open(sys.argv[2], 'wb').write(img)
-print(f"[verify] 解压后 Image = {len(img)} 字节")
+print(f"[verify] Image.gz-dtb {len(raw)} 字节 → 解出 Image {len(img)} 字节（其余是追加的 dtb）")
 PY
 VIMG="$OUT/verify/Image"
 hit() { c=$(grep -ac -- "$1" "$VIMG" 2>/dev/null || true); [ "${c:-0}" -gt 0 ] || die "解压 Image 里找不到: $1"; log "命中 $1 = $c"; }
