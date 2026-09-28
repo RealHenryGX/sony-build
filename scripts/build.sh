@@ -121,6 +121,11 @@ hit ksu_handle
 strings -a "$VIMG" | grep -m1 'Linux version'
 
 step "8/8 重打包 boot.img（原厂 ramdisk + 原 header 参数）"
+# 全部在 $OUT/repack 里做，避免往内核树里拉东西（本地跑时尤其重要）
+REPACK="$OUT/repack"
+rm -rf "$REPACK"; mkdir -p "$REPACK" "$DIST"
+cd "$REPACK"
+BOOTIMG="$DIST/boot-${RELEASE}.img"
 wget -q "$STOCK_BOOT_URL" -O stock_boot.img || die "stock boot 下载失败"
 git clone -q --depth 1 https://github.com/LineageOS/android_system_tools_mkbootimg mkbootimg-tools
 python3 mkbootimg-tools/unpack_bootimg.py --boot_img stock_boot.img --out stock_unpack >/dev/null
@@ -135,7 +140,6 @@ log "stock boot: kernel_size=$1 ramdisk_size=$2 header_v=$3"
 [ "$3" -ge 1 ]  || die "stock boot header_version=$3（预期 v1）"
 [ "$2" -gt 5000000 ] || die "stock ramdisk 太小（$2）—— 解包不对"
 
-BOOTIMG="boot-${RELEASE}.img"
 python3 mkbootimg-tools/mkbootimg.py \
   --kernel "$KIMG" \
   --ramdisk stock_unpack/ramdisk \
@@ -154,11 +158,11 @@ print(f"boot.img: {len(d)} 字节 kernel={ks} ramdisk={rs} header_v={hv}")
 assert d[:8] == b'ANDROID!' and ks > 10000000 and rs > 5000000 and hv >= 1, "boot.img 结构异常"
 PY
 
-mkdir -p "$DIST"
-cp "$BOOTIMG" "$DIST/"
 cp "$OUT/final.config" "$DIST/"
-sha256sum "$DIST/$BOOTIMG" | tee "$DIST/$BOOTIMG.sha256"
+sha256sum "$BOOTIMG" | tee "$BOOTIMG.sha256"
 echo "$RELEASE" > "$DIST/release.txt"
 echo "$DEVICE" > "$DIST/device.txt"
 ls -l "$DIST"
 log "构建完成：$RELEASE ($DEVICE)"
+log "  镜像: $BOOTIMG"
+log "  内核: $KIMG ($(stat -c%s "$KIMG") 字节)"
