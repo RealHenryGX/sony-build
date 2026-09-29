@@ -92,7 +92,11 @@ if [ "${SKIP_BUILD:-0}" = "1" ] && [ -f "$OUT/arch/arm64/boot/Image.gz-dtb" ] &&
     REUSE=1
     log "SKIP_BUILD=1：复用已有 $OUT（配置 + 产物），跳过配置与编译 —— 仅用于迭代调试"
 else
-    rm -rf "$OUT"; mkdir -p "$OUT"
+    if [ "${KEEP_OUT:-0}" = "1" ] && [ -f "$OUT/.config" ]; then
+        log "KEEP_OUT=1：保留 $OUT 做增量编译（不重新 rm -rf）"
+    else
+        rm -rf "$OUT"; mkdir -p "$OUT"
+    fi
     make -j"$JOBS" O="$OUT" ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
          CROSS_COMPILE_ARM32=arm-linux-gnueabi- $LLVM_TOOLS "$DEFCONFIG" >/dev/null
     cp "$OUT/.config" "$OUT/final.config"   # upload-artifact 会跳过 .config 这种隐藏名
