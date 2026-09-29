@@ -109,7 +109,10 @@ grep -E "^CONFIG_(KSU|KSU_SUSFS|LOCALVERSION)=" "$OUT/.config"
 
 step "5/8 release 串契约"
 # include/config/kernel.release 只在真正编译时才生成，所以这里用 make kernelrelease 取值。
-RELEASE_RAW="$(make -s O="$OUT" ARCH=arm64 kernelrelease 2>/dev/null | tail -1)"
+# 注意：必须带上和编译步一样的工具链变量 —— 4.9.337 的 arch/arm64/Makefile 会检查
+# CROSS_COMPILE_ARM32（arm32 compat vDSO），缺失直接 Stop。也不要吃掉 stderr。
+RELEASE_RAW="$(make -s O="$OUT" ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
+    CROSS_COMPILE_ARM32=arm-linux-gnueabi- $LLVM_TOOLS kernelrelease 2>&1 | tail -1)"
 [ -n "$RELEASE_RAW" ] || die "make kernelrelease 取不到值"
 RELEASE="${RELEASE_RAW%+}"
 log "kernel release = $RELEASE_RAW"
